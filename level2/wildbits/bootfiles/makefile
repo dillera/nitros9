@@ -82,6 +82,7 @@ BOOTFILE_SD_K2 = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBWBSD) \
 		$(MD)/dds0.dd \
 		$(SOL) \
+		$(SC16550) \
 		$(WIZFI) \
 		$(PIPE) \
 		$(CLOCK) \
@@ -95,6 +96,7 @@ BOOTFILE_DW_K2 = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBWBSD) \
 		$(MD)/ddx0.dd \
 		$(SOL) \
+		$(SC16550) \
 		$(WIZFI) \
 		$(PIPE) \
 		$(CLOCK) \
@@ -108,6 +110,7 @@ BOOTFILE_SD_K = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBWBSD) \
 		$(MD)/dds0.dd \
 		$(SOL) \
+		$(SC16550) \
 		$(WIZFI) \
 		$(PIPE) \
 		$(CLOCK) \
@@ -121,6 +124,7 @@ BOOTFILE_DW_K = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBWBSD) \
 		$(MD)/ddx0.dd \
 		$(SOL) \
+		$(SC16550) \
 		$(WIZFI) \
 		$(PIPE) \
 		$(CLOCK) \
@@ -134,6 +138,7 @@ BOOTFILE_SD_JR = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBWBSD) \
 		$(MD)/dds0.dd \
 		$(SOL) \
+		$(SC16550) \
 		$(WIZFI) \
 		$(PIPE) \
 		$(CLOCK) \
@@ -147,6 +152,7 @@ BOOTFILE_DW_JR = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBWBSD) \
 		$(MD)/ddx0.dd \
 		$(SOL) \
+		$(SC16550) \
 		$(WIZFI) \
 		$(PIPE) \
 		$(CLOCK) \
@@ -160,6 +166,7 @@ BOOTFILE_CART_JR = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBWBSD) \
 		$(MD)/ddc0.dd \
 		$(SOL) \
+		$(SC16550) \
 		$(WIZFI) \
 		$(PIPE) \
 		$(CLOCK) \
