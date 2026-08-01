@@ -2,6 +2,7 @@ PORT ?= wildbits
 RECIPE ?= wildbits
 MODDIR = .mods
 include ../../rules.mak
+export NITROS9DIR
 -include recipe.mak
 
 vpath %.asm $(LANGUAGES)/basic09
@@ -18,6 +19,15 @@ else
   PLATFORM = k2
 endif
 
+ifeq ($(PLATFORM),jr2)
+BOOT_DIAG ?= 1
+RUN_STARTUP ?= 0
+else
+BOOT_DIAG ?= 0
+RUN_STARTUP ?= 1
+endif
+BOOT_DIAG_BAUD ?= 9600
+
 DSKIMAGE ?= l$(LEVEL)_$(RECIPE)$(PLATFORM).dsk
 OS9FORMAT_CMD ?= $(OS9FORMAT_SD)
 
@@ -33,6 +43,9 @@ LFLAGS += -L $(LIBDIR) -lwildbitsl$(LEVEL) -lnet -lalib
 LFLAGS += $(LFLAGS_EXTRA)
 
 FUJINET ?= 0
+WIZFI ?= 0
+# Must match the FujiNet/host bridge. Stock CoCo 3 FujiNet firmware uses 115200.
+DRIVEWIRE_BAUD ?= 115200
 
 BOOT_RBF ?= dds0
 RBF = rbf rbsuper llwbsd rbmem $(BOOT_RBF) s1 f0 f1 $(RBF_EXTRA)
@@ -43,10 +56,15 @@ endif
 DRIVEWIRE_RBF = rbdw x0 x1 x2 x3
 DRIVEWIRE_SCF = scdwv n n1 n2 n3 n4 n5
 DRIVEWIRE = dwio_serial $(DRIVEWIRE_RBF) $(DRIVEWIRE_SCF)
-DRIVEWIRE_BOOTMODS = dwio_serial $(PIPE) $(SC16550)
+DRIVEWIRE_BOOTMODS = dwio_serial $(PIPE)
 PIPE = pipeman piper pipe
 SC16550 = sc16550 t0_sc16550
+WIZFI_BOOTMODS = wizfi wizfidesc
 CLOCK = clock clock2_wildbits
+
+ifeq ($(WIZFI),1)
+SCF_EXTRA += $(WIZFI_BOOTMODS)
+endif
 
 # NOTE!!!
 # VTIO must be near the top of the bootlist so that it can safely map
@@ -80,12 +98,10 @@ CMDS += $(STDCMDS) shell \
 	$(CMDS_EXTRA)
 
 ifeq ($(LEVEL),2)
-UTILPAK1_MODS = attr copy date del deiniz dir display list makdir mdir \
-	merge mfree procs rename tmode unlink
 CMDS += dmem minted mmap modpatch \
 	proc pmap smap \
 	gfxstatus xtclut drawtest play \
-	shellbg shellbgoff ntptime view utilpak1 fadein fadeout
+	shellbg shellbgoff ntptime view fadein fadeout
 endif
 
 BASIC09 = basic09 runb inkey syscall wild
@@ -93,7 +109,15 @@ BASIC09_FILES = $(wildcard $(LANGUAGES)/basic09/samples/*)
 BASIC09_BIN = $(LANGUAGES)/basic09/basic09_6809
 RUNB_BIN = $(LANGUAGES)/basic09/runb_6809
 RUNB_SHA256 = 20ff5a997ec0e55f6aec1e37d92be49062d6c35a66e4b5404d9e680fc0783bbb
+ifeq ($(WIZFI),1)
 STARTUP = $(LEVEL2)/wildbits/startup
+else
+ifeq ($(LEVEL),2)
+STARTUP = $(NITROS9DIR)/recipes/wildbits/startup.nowiz
+else
+STARTUP = $(NITROS9DIR)/recipes/wildbits/startup.nowiz.l1
+endif
+endif
 FEU_STARTUP = feu.startup
 SCRIPTS_DIR = $(LEVEL1)/wildbits/scripts
 TESTS_DIR = $(LEVEL1)/wildbits/tests
@@ -140,7 +164,8 @@ $(MODDIR)/sysgo: $(OBJDIR)/sysgo.o | $(MODDIR)
 	$(LINKER) $(LFLAGS) $^ -osysgo
 	$(MOVE) sysgo $@
 
-$(OBJDIR)/sysgo.o: sysgo.as | $(OBJDIR)
+$(OBJDIR)/sysgo.o: AFLAGS += -DBOOT_DIAG=$(BOOT_DIAG) -DBOOT_DIAG_BAUD=$(BOOT_DIAG_BAUD) -DRUN_STARTUP=$(RUN_STARTUP)
+$(OBJDIR)/sysgo.o: sysgo.as FORCE | $(OBJDIR)
 .PHONY: wildbits-sys-assets
 wildbits-sys-assets:
 	@mkdir -p $(SYS_DIR)
@@ -154,7 +179,7 @@ $(FEU_STARTUP): FORCE
 FORCE: ;
 
 ifeq ($(LEVEL),2)
-  PADUP ?= ./padup256 bootfile
+  PADUP ?= $(NITROS9DIR)/recipes/wildbits/l2/padup256 bootfile
 endif
 bootfile: $(addprefix $(MODDIR)/,$(BOOTMODS))
 	$(MERGE) $(addprefix $(MODDIR)/,$(BOOTMODS))>$@
@@ -224,12 +249,6 @@ $(MODDIR)/runb: $(RUNB_BIN) | $(MODDIR)
 	$(CP) $< $@
 	@printf '%s  %s\n' "$(RUNB_SHA256)" $@ | shasum -a 256 -c -
 
-ifeq ($(LEVEL),2)
-$(MODDIR)/utilpak1: $(addprefix $(MODDIR)/,$(UTILPAK1_MODS)) | $(MODDIR)
-	$(MERGE) $^ > utilpak1
-	$(MOVE) utilpak1 $@
-endif
-
 # Descriptor rules
 # SD card descriptors
 $(MODDIR)/dds0: rbwbsddesc.asm | $(MODDIR)
@@ -264,8 +283,9 @@ $(MODDIR)/dwio_wizfi: dwio.asm | $(MODDIR)
 $(MODDIR)/wizfidesc: wizfidesc.asm | $(MODDIR)
 	$(AS) $(AFLAGS) $< $(ASOUT)$@ -DDeviceMode=0 -DConnection=0
 
-$(MODDIR)/dwio_serial: dwio.asm | $(MODDIR)
-	$(AS) $(AFLAGS) $< $(ASOUT)$@ -DDWIO_SERIAL
+$(MODDIR)/dwio_serial: dwio.asm dwinit_wildbits_serial.asm \
+	dwread_wildbits_serial.asm dwwrite_wildbits_serial.asm FORCE | $(MODDIR)
+	$(AS) $(AFLAGS) $< $(ASOUT)$@ -DDWIO_SERIAL -DDWBaud=$(DRIVEWIRE_BAUD)
 
 # DriveWire 3 RBF descriptors
 $(MODDIR)/ddx0: dwdesc.asm | $(MODDIR)

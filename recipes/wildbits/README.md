@@ -28,10 +28,10 @@ This avoids modifying large shared makefiles.
 
 From the repository root, ensure:
 
-- `NITROS9DIR` is set to your NitrOS-9 source tree
 - toolchain is on `PATH`: `make`, `lwasm`, `lwlink`, `lwar`, `os9`, `zip`
 
-Example:
+`NITROS9DIR` is inferred when building inside this tree. It can be overridden for
+an unusual checkout layout:
 
 ```sh
 export NITROS9DIR=/Users/boisy/Projects/coco-shelf/nitros9
@@ -93,6 +93,14 @@ Primary output:
 
 - `l1_wildbits_dwjr2.dsk` (or `l1_wildbits_dwk2.dsk`, etc.)
 
+The DriveWire images default to 115200 baud and include `rbdw`, `/X0` through
+`/X3`, `scdwv`, `/N`, and the `fn*` FujiNet commands. To build for a different
+matching FujiNet or bridge speed:
+
+```sh
+make DRIVEWIRE_BAUD=57600
+```
+
 ## Level 2 Build ([`wildbits/l2`](l2/))
 
 ```sh
@@ -119,6 +127,76 @@ make
 Primary output:
 
 - `l2_wildbits_dwjr2.dsk` (or `l2_wildbits_dwk2.dsk`, etc.)
+
+## Jr2 Serial and FujiNet Testing
+
+Wildbits recipe builds disable WizFi by default. This keeps the WizFi Timer-0
+interrupt path from locking a Jr2 without a working WizFi interface. To build an
+image for hardware that uses WizFi instead, opt in explicitly:
+
+```sh
+make WIZFI=1
+```
+
+Ordinary Jr2 images also enable a polled `sysgo` boot trace on the system-UART
+USB channel at 9600 baud. It does not install an interrupt handler or SCF device.
+The trace prints numbered `SG00` through `SG16` markers around directory setup,
+screen initialization, startup, AutoEx, and the final shell chain. On macOS:
+
+```sh
+screen /dev/cu.usbserial-600SA20462 9600
+```
+
+Use `make BOOT_DIAG=0` to omit the trace, or `make BOOT_DIAG_BAUD=19200` to
+select another baud rate. DriveWire/FujiNet images always disable this logger
+because their `dwio` module owns the same UART.
+
+Jr2 builds skip the startup procedure by default (`RUN_STARTUP=0`) because the
+ShellPlus startup child does not terminate reliably on this target. Commands
+remain available individually in `CMDS`. Use `make RUN_STARTUP=1` to restore
+the traditional `shell startup -p` step when testing that path.
+
+The ordinary `l1` and `l2` images keep the SC16550 driver and `/t0` descriptor
+resident in `OS9Boot`, but do not initialize the device automatically. After
+the system reaches a shell, initialize `/t0` before the serial smoke test:
+
+```sh
+iniz /t0
+```
+
+`/t0` defaults to 9600 baud, 8 data bits, no parity, and one stop bit. With a
+host terminal attached to the Jr2 system-UART USB channel:
+
+```sh
+echo SERIAL-OUT >/t0
+```
+
+Use the serial test program or `copy /t0 /term` to test data entering the Jr2.
+The Jr2 SC16550 path uses polled reads and writes because its active TX and RX
+interrupt service paths lock the machine. Other Wildbits targets retain the
+interrupt-driven driver. Pressing Ctrl-C to stop a blocking `copy` can make the
+shell print `ERROR #003`; this is the expected `S$Intrpt` termination status.
+
+The `l1dw` and `l2dw` images deliberately omit `/t0`. Their `dwio` module owns
+the same UART at `$FE60`; opening `/t0` at the same time would reconfigure or
+consume DriveWire traffic.
+
+The Jr2 and USB serial adapter must both be downstream devices of a USB host,
+such as a Mac or PC. The host bridges the Jr2 system-UART channel to the adapter
+connected to the FujiNet. A hub connected upstream to the Jr2 cannot enumerate
+a USB serial adapter. Confirm TTL versus RS-232 electrical levels, voltage,
+inversion, ground, and RX/TX crossover before connecting the adapter.
+
+With both host serial devices configured raw at the same baud as the image,
+boot a DriveWire image and test:
+
+```sh
+dir /x0
+fnstatus
+```
+
+`dir /x0` validates the DriveWire block path. `fnstatus` additionally validates
+the FujiNet transaction path through `/N`.
 
 ## Mega Level 2 Builds
 

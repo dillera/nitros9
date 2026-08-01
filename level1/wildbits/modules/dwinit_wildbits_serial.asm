@@ -1,16 +1,22 @@
+                    ifndef    DWBaud
+DWBaud              equ       115200
+                    endc
+
+UARTClock           equ       25175000
+UARTDivisor         equ       (UARTClock+(DWBaud*8))/(DWBaud*16)
+
 DWInit
 * Initialize the baud rate.
                     ldx       #UART.Base
                     lda       UART_LCR,x
                     ora       #LCR_DLB
                     sta       UART_LCR,x
-                    lda       UART_LCR,x
 
-                    lda       #0
-                    sta       UART_DLH,x
-*               lda       #13                 (25.125Mhz / (16 * 115200)) = 13.65 (internal speed of Devices inside FPGA is 25.175Mhz (not 6Mhz))
-                    lda       #6                  (25.125Mhz / (16 * 230400)) = 6.82 (internal speed of Devices inside FPGA is 25.175Mhz (not 6Mhz))
-                    sta       UART_DLL,x
+                    pshs      b                   preserve caller's B register
+                    ldd       #UARTDivisor         use the nearest integer divisor for the selected baud rate
+                    sta       UART_DLH,x           write the high divisor byte while DLAB is set
+                    stb       UART_DLL,x           write the low divisor byte while DLAB is set
+                    puls      b                   restore caller's B register
 
                     lda       UART_LCR,x
                     eora      #LCR_DLB

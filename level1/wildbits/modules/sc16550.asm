@@ -64,6 +64,17 @@ TXF.NXON equ %00000100 currently waiting for XON
 TXF.NCTS equ %00000010 waiting for CTS to go back up
 TXF.NDSR equ %00000001 waiting for DSR to go back up
 
+* The Jr2 16550 interrupt path locks once active transmit or receive work
+* reaches its ISR.  FujiNet uses a three-wire serial connection, and the
+* Jr2 DriveWire backend is polled as well, so keep the Jr2 UART IER clear.
+ ifne jr2
+UART_BASE_IRQS equ $00
+UART_TX_IRQS equ $00 Jr2 transmit and receive are polled
+ else
+UART_BASE_IRQS equ UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_DATA_AVAIL
+UART_TX_IRQS equ UART_BASE_IRQS+UINT_THR_EMPTY
+ endc
+
  mod eom,name,tylg,atrv,start,size
 
 * Static memory storage.
@@ -234,8 +245,8 @@ cont6@ lda >PIA1Base+3 fetch PIA1 CR B
  sta >IrqEnR ...and the GIME itself.
  endc
  endc
-* Enable all 16550 IRQ sources *except* transmitter empty
- lda #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_DATA_AVAIL enable modem status, receiver line status, and receive data available interrupts on 16550
+* Enable the platform's base 16550 IRQ sources (not transmitter empty)
+ lda #UART_BASE_IRQS
  bsr SetIRQSources
  puls pc,dp,b,cc restore registers, reenable IRQs, and return
 
@@ -252,6 +263,21 @@ cont6@ lda >PIA1Base+3 fetch PIA1 CR B
 Write clrb
  pshs dp,b,cc
  lbsr SetDPShortcut point DP to first 256 bytes of device memory area
+ ifne jr2
+* Bypass the Jr2 transmit-interrupt path.
+* Bound the readiness wait so a bad LSR value cannot trap the kernel.
+ ldx <V.PORT get pointer to 16550
+ pshs y,a preserve path descriptor and output character
+ ldy #$2000 bounded readiness poll
+polltx@ ldb UART_LSR,x
+ bitb #LSR_XMIT_EMPTY is the transmit holding register empty?
+ bne txready@
+ leay -1,y
+ bne polltx@
+txready@ puls a,y restore output character and path descriptor
+ sta UART_TRHB,x write one character directly
+ puls pc,dp,b,cc
+ endc
  ldx <outNxt get pointer to next empty spot in our transmit buffer
  sta ,x+ append the character
  cmpx <txBufEnd have we hit physical end of transmit buffer?
@@ -272,10 +298,10 @@ cont1@ orcc #IntMasks IRQs off
 cont2@ bra cont1@ else loop back
 cont3@ stx <outNxt save updated pointer to next free spot in transmit buffer
  inc <txBufCnt increase number of bytes in driver's transmit buffer
- bsr EnableIRQSources enable all IRQ's on 16550 *including* transmitter empty IRQ
+ bsr EnableIRQSources enable the platform's transmit-time IRQ sources
 cont4@ puls pc,dp,b,cc 
-* Enable all 4 16550 IRQ sources
-EnableIRQSources lda #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_THR_EMPTY+UINT_DATA_AVAIL enable modem status, receiver line status, transmitter empty & receive data available interrupts on 16550
+* Enable the platform's IRQ sources used while transmit work is pending
+EnableIRQSources lda #UART_TX_IRQS
 SetIRQSources ldx <V.PORT get pointer to 16550
  sta UART_IER,x set interrupt enable register
  rts
@@ -294,6 +320,23 @@ SetIRQSources ldx <V.PORT get pointer to 16550
 Read clrb clear carry
  pshs dp,b,cc save registers (B's position on the stack will be used as A (character return))
  lbsr SetDPShortcut point DP to first 256 bytes of device memory area
+ ifne jr2
+* Bypass the Jr2 receive-interrupt path.
+pollrx@ ldx <V.PORT get pointer to 16550
+ lda UART_LSR,x get line status
+ bita #LSR_DATA_AVAIL is a character ready?
+ bne rxready@
+ ldx #$0001 yield for one tick while waiting
+ os9 F$Sleep
+ ldx >D.Proc get current process descriptor
+ ldb <P$Signal,x get any pending signal
+ beq pollrx@
+ cmpb #S$Intrpt is it keyboard interrupt, abort, or wake?
+ bls errexit@
+ bra pollrx@
+rxready@ lda UART_TRHB,x return one received character
+ puls pc,dp,b,cc
+ endc
  orcc #IntMasks turn IRQs off
  ldd <rxBufCnt get number of bytes in receive buffer
  beq suspend@ none, so go suspend process
@@ -613,7 +656,7 @@ chkbreak@ cmpa #SS.Break break?
  lda <TxFloCtl
  ora #TXF.NBRK stop transmit, sending break
  sta <TxFloCtl
- lda #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_DATA_AVAIL
+ lda #UART_BASE_IRQS
  sta UART_IER,x
  clr <txBufCnt
  ldd <txBufStrt
@@ -706,7 +749,7 @@ chkopen@ cmpa #SS.Open open?
  ldx <V.PORT get pointer to 16550
  lda #MCR_RTS+MCR_DTR assert DTR & RTS
  sta UART_MCR,x
- ldb #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_THR_EMPTY+UINT_DATA_AVAIL enable all interrupts
+ ldb #UART_TX_IRQS enable the platform's transmit-time interrupts
  stb UART_IER,x
  bra RestoreAndExit
 unksvc@ puls b,cc
@@ -813,7 +856,6 @@ IRQSvc clrb clear carry
  ldb UART_IIR,y get interrupt identification register
  bitb #IIR_INTERRUPT_PENDING is an interrupt pending?
  beq BranchForIRQ yes, skip ahead
- tfr a,b copy value of UART_FCR passed to ISR to B for analysis
  andb #IIR_INTID_MASK strip the IRQ pending bit
  bne BranchForIRQ if any of the 3 bits are set, call 16550 IRQ dispatch table
  puls cc all clear, we likely were called in error, return carry set to IOMAN
@@ -954,7 +996,7 @@ cont5@ bita #FCTXSW is this bit set?
  lda <V.XOFF get transmit OFF character
  beq ex@ none, restore B and return
  sta <txNow save to sw flow character
- ldb #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_THR_EMPTY+UINT_DATA_AVAIL
+ ldb #UART_TX_IRQS
  stb UART_IER,y
  bra ex@
 
@@ -964,7 +1006,7 @@ DoXON lda <TxFloCtl
  sta <TxFloCtl
  tst <txBufCnt test tx buffer size
  beq ex@ branch if empty
- lda #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_THR_EMPTY+UINT_DATA_AVAIL else set interrupts
+ lda #UART_TX_IRQS else set interrupts
  sta UART_IER,y
 ex@ rts   
 
@@ -972,7 +1014,7 @@ ex@ rts
 DoXOFF lda <TxFloCtl
  ora #FCRXSW
  sta <TxFloCtl
- lda #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_DATA_AVAIL
+ lda #UART_BASE_IRQS
  sta UART_IER,y
  rts   
 
@@ -1030,7 +1072,7 @@ cont4@ stx <txBufPos
  subb ,s+
  stb <txBufCnt
 cont5@ lbra UnkIRQ
-cont2@ lda #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_DATA_AVAIL
+cont2@ lda #UART_BASE_IRQS
  sta UART_IER,y update 16550 hardware
  bra cont5@
 
@@ -1077,7 +1119,7 @@ cont3@ tst <sigCode is there a signal code pending?
  std <pathDescCPR clear off path descriptor and current process
  bra cont5@
 cont4@ stb <TxFloCtl save flags
-cont5@ lda #UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_THR_EMPTY+UINT_DATA_AVAIL load interrupts we want
+cont5@ lda #UART_TX_IRQS load interrupts we want
  sta UART_IER,y set interrupts in 16550
  lbra UnkIRQ handle unknown IRQ
 
@@ -1111,7 +1153,7 @@ IRQPckt fcb $01 flip byte 16550 device address+2 is status register, and lowest
  fcb $80 IRQ priority
          
 brate macro
- fdb ClkRate/16/\1,((FCR_FIFOE!FRT_\2)*256)+\2
+ fdb (ClkRate+(8*\1))/(16*\1),((FCR_FIFOE!FRT_\2)*256)+\2
  endm
  
 * Baud Rate Table. 4 bytes/entry, and 16 entries (0-15).
