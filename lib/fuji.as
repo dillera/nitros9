@@ -32,11 +32,12 @@ fbreq               rmb       fbmaxreq+2          response-length prefix + reque
 fbsmall             rmb       4                   prefix + [OP_FUJI,command]
 fbstat              rmb       1                   FUJI$GetError reply byte
 fbtries             rmb       1                   FBReady retry counter
+fbpath              rmb       1                   open OS-9 path number
                     endsect
 
                     section   code
 
-devnam              fcs       "/N"
+devnam              fcs       "/N1"
 
 * NOpen - open a path to the FujiNet/DriveWire network device
 *
@@ -47,6 +48,9 @@ NOpen               pshs      x
                     lda       #UPDAT.
                     leax      devnam,pcr
                     os9       I$Open
+                    bcs       openex@
+                    sta       fbpath,u
+openex@
                     puls      x,pc
 
 * FBReady - poll the FujiNet until it reports ready
@@ -64,7 +68,7 @@ ready@              leax      fbsmall,u
                     ldd       #OP_FUJI*256+FUJI$Ready
                     std       2,x
                     ldy       #4
-                    lda       ,s                  path
+                    lda       fbpath,u            path saved by NOpen
                     ldb       #SS.Fuji
                     pshs      u
                     leau      fbstat,u
@@ -113,11 +117,11 @@ copy@               lda       ,x+
                     ldd       3,s
                     addd      #2                  include the prefix
                     tfr       d,y
-                    lda       ,s                  path
+                    lda       fbpath,u            path saved by NOpen
                     ldb       #SS.Fuji
                     os9       I$SetStt
                     bcs       ex@                 wire error
-                    lda       ,s
+                    lda       fbpath,u
                     bsr       FBErr               did the firmware like it?
 ex@                 puls      a,x,y,u,pc
 bad@                comb
@@ -138,7 +142,7 @@ FBErr               pshs      a,x,y,u
                     ldd       #OP_FUJI*256+FUJI$GetError
                     std       2,x
                     ldy       #4
-                    lda       ,s                  path
+                    lda       fbpath,u            path saved by NOpen
                     ldb       #SS.Fuji
                     pshs      u
                     leau      fbstat,u
@@ -167,7 +171,7 @@ FBRead              pshs      a,x,y,u
                     ldd       #OP_FUJI*256+FUJI$GetResponse
                     std       2,x
                     ldy       #4
-                    lda       ,s                  path
+                    lda       fbpath,u            path saved by NOpen
                     ldb       #SS.Fuji
                     ldu       1,s                 caller's buffer
                     os9       I$SetStt

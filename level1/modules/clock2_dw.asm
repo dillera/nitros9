@@ -24,9 +24,9 @@ rev                 set       $00
 edition             set       2
 
 
-RTC.Base            equ       $0000
+ClockMem            equ       $0000
 
-                    mod       eom,name,tylg,atrv,JmpTable,RTC.Base
+                    mod       eom,name,tylg,atrv,JmpTable,ClockMem
 
 name                fcs       "Clock2"
                     fcb       edition

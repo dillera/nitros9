@@ -10,6 +10,7 @@ source tree.
 | `dis6809.py` | Disassembles 6809 machine code for reverse-engineering work |
 | `os9dis.py` | Disassembles OS-9 modules and data structures |
 | `fcb2bin.py` | Converts assembly `fcb` byte declarations to binary data |
+| `drivewire_serial_bridge.py` | Relays Jr2/FujiNet DriveWire serial traffic and automatically reconnects USB devices after power cycles; optional traffic statistics are enabled with `--stats-interval SECONDS` |
 | `debug/list2crc.pl` | Converts an `lwasm` listing into CRC-named listing files |
 | `debug/os9.gdb` | Defines GDB helpers that consume CRC-named listings |
 

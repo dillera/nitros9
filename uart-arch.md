@@ -170,8 +170,8 @@ The DriveWire image does not pass traffic through `sc16550`. Its dedicated
 backend is assembled from:
 
 - [`dwinit_wildbits_serial.asm`](level1/wildbits/modules/dwinit_wildbits_serial.asm),
-  which configures the `$FE60` UART for 8-N-1 and computes a rounded divisor
-  from the 25.175 MHz UART clock;
+  which configures the `$FE60` UART for 8-N-1 and uses divisor 13 at 115200
+  baud with the 25.175 MHz UART clock;
 - [`dwread_wildbits_serial.asm`](level1/wildbits/modules/dwread_wildbits_serial.asm),
   which polls for received bytes; and
 - [`dwwrite_wildbits_serial.asm`](level1/wildbits/modules/dwwrite_wildbits_serial.asm),
@@ -191,10 +191,12 @@ between the request and response could consume bytes belonging to the command.
 On Level 2, caller data is staged through a system buffer and moved with
 `F$Move`.
 
-[`lib/fuji.as`](lib/fuji.as) sends the FujiNet opcode and command through `/n`,
-then obtains the response and device error through `SS.Fuji`. Command and
-status constants are defined in [`defs/drivewire.d`](defs/drivewire.d). The
-DriveWire recipe includes the `fn*` utilities when `FUJINET=1`.
+[`lib/fuji.as`](lib/fuji.as) sends the FujiNet opcode and command through
+`/N1`, then obtains the response and device error through `SS.Fuji`. It keeps
+the path number returned by `I$Open` in its data area so every transaction uses
+the same valid OS-9 path. Command and status constants are defined in
+[`defs/drivewire.d`](defs/drivewire.d). The DriveWire recipe includes the
+`fn*` utilities when `FUJINET=1`.
 
 ## Related boot changes
 
@@ -325,14 +327,18 @@ UART failure.
 2. Identify the new adapter device with a before/after comparison of
    `/dev/cu.*`.
 3. Configure FujiNet with a disk in DriveWire slot 0.
-4. Start a raw, binary-clean bridge at 115200 baud. With `socat` installed by
-   Homebrew, the command has this form:
+4. Start the reconnectable, binary-clean bridge at 115200 baud. It remains
+   running when the Jr2 is powered off and automatically reopens the Jr2 USB
+   serial device when it returns:
 
    ```sh
-   /opt/homebrew/bin/socat -d -d \
-     FILE:/dev/cu.usbserial-600SA20462,b115200,rawer,echo=0 \
-     FILE:/dev/cu.FUJINET_ADAPTER,b115200,rawer,echo=0
+   python3 scripts/drivewire_serial_bridge.py \
+     --jr2 /dev/cu.usbserial-600SA20462 \
+     --fujinet /dev/cu.usbserial-1440
    ```
+
+   Either endpoint can be a quoted glob if macOS does not preserve its exact
+   name across reconnects, for example `--jr2 '/dev/cu.usbserial-*62'`.
 
 5. Boot `l2_wildbits_dwjr2.dsk` on the Jr2.
 6. At the NitrOS-9 shell, verify the remote disk and FujiNet command path:
@@ -342,8 +348,9 @@ UART failure.
    fnstatus
    ```
 
-Do not run a terminal emulator on either endpoint while `socat` owns it. Any
-extra character injected into the stream can invalidate a DriveWire packet.
+Do not run a terminal emulator on either endpoint while the bridge owns it.
+Any extra character injected into the stream can invalidate a DriveWire
+packet.
 
 ## Troubleshooting and diagnostic caveats
 
@@ -362,6 +369,8 @@ extra character injected into the stream can invalidate a DriveWire packet.
 - The external FujiNet-side adapter was not enumerated during the final `/t0`
   loopback test. Confirm its actual macOS device name before starting the
   bridge.
+- After rebuilding a TNFS-served image, unmount and remount its FujiNet device
+  slot. FujiNet otherwise retains its open handle to the previous file.
 
 ## Verified behavior and remaining work
 
@@ -386,7 +395,11 @@ The repaired IRQ path was then verified on the physical Jr2:
   through `copy /t0 /term`, and left the system responsive; and
 - Ctrl-C stopped the copy and returned `ERROR #003` (`S$Intrpt`) as expected.
 
+The DriveWire/FujiNet path was subsequently verified end to end: the Jr2
+booted from `/x0`, DriveWire supplied the system time, the reconnectable bridge
+survived a Jr2 power cycle, and `fnstatus` successfully returned adapter and
+Wi-Fi information. See [`FujiNet-UART.md`](FujiNet-UART.md) for the complete
+setup, Fuji transaction fixes, and troubleshooting history.
+
 Long-duration and simultaneous bidirectional stress remain useful follow-up
-tests. The DriveWire boot file composition was verified separately, but the
-end-to-end bridge through the external adapter to a physical FujiNet still
-remains to be tested.
+tests for the normal `/t0` IRQ path.

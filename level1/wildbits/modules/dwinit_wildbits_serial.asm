@@ -3,7 +3,10 @@ DWBaud              equ       115200
                     endc
 
 UARTClock           equ       25175000
-UARTDivisor         equ       (UARTClock+(DWBaud*8))/(DWBaud*16)
+* Match the divisor convention used by the established F256 serial
+* implementation.  At 115200 baud the 25.175 MHz UART clock must use
+* divisor 13; rounding to 14 corrupts some byte patterns on the Jr2.
+UARTDivisor         equ       UARTClock/(DWBaud*16)
 
 DWInit
 * Initialize the baud rate.

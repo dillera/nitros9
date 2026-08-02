@@ -61,7 +61,7 @@ DRIVEWIRE_BOOTMODS = dwio_serial $(PIPE)
 PIPE = pipeman piper pipe
 SC16550 = sc16550 t0_sc16550
 WIZFI_BOOTMODS = wizfi wizfidesc
-CLOCK = clock clock2_wildbits
+CLOCK ?= clock clock2_wildbits
 
 ifeq ($(WIZFI),1)
 SCF_EXTRA += $(WIZFI_BOOTMODS)
