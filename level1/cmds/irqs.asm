@@ -264,17 +264,13 @@ z01B1               pshs      x
 z01CA               pshs      x                   on entry, x points to which poltbl entry to display
                     ldb       <devcount
                     pshs      b
-* now we make an assumption that data
-* areas for the same driver will be
-* in the same page of memory, so compare
-* only the high bytes of the address
-                    ldb       Q$STAT,x            get irq dat addr
+                    ldd       Q$STAT,x            get IRQ static-storage address
                     ifgt      Level-1
                     leax      devtable,u          devtbl buffer
                     else
                     ldx       <ddevtbl
                     endc
-z01D6               cmpb      V$STAT,x
+z01D6               cmpd      V$STAT,x
                     beq       Match               if match, found device
                     leax      DEVSIZ,x            else inc to next tbl entry
                     dec       ,s                  and decrement coounter

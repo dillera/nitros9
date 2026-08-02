@@ -3,8 +3,9 @@
 ## Status and scope
 
 This document describes the UART changes and hardware behavior tested on the
-Wildbits Jr2 on the `fujinetAug` branch. The working design uses the Jr2 UART in
-polled mode. It supports two separate disk images:
+Wildbits Jr2. The `uart-fixes` branch restores interrupt-driven `/t0` operation
+after first establishing a known-good polled baseline. It supports two separate
+disk images:
 
 - the normal SD-rooted image, which exposes the UART as the NitrOS-9 SCF device
   `/t0`; and
@@ -87,7 +88,7 @@ testing after the upstream IOMan changes. The DriveWire boot file contains
 This single-owner rule is a design invariant. Do not add `/t0` to the DriveWire
 boot image unless a higher-level multiplexer is also designed and implemented.
 
-## Why the Jr2 driver is polled
+## IRQ failure and repair
 
 The original 16550 driver is interrupt-driven. On the Jr2, initialization can
 appear healthy with several interrupt-enable combinations, but the machine
@@ -104,32 +105,58 @@ separated quiescent initialization from active traffic:
 | receive interrupt path with incoming data | locked once enough data arrived to trigger RX service |
 | polled transmit and receive with IER cleared | bidirectional traffic worked |
 
-The failure is therefore in the active Jr2 interrupt path, not basic UART
-addressing, baud generation, or USB transport. The exact ISR/controller failure
-remains unresolved. The safe architecture keeps the 16550 Interrupt Enable
-Register at zero on Jr2 and performs both directions by polling.
+The failure was therefore in the active Jr2 interrupt path, not basic UART
+addressing, baud generation, or USB transport. Source inspection found two
+independent problems:
+
+1. `sc16550` registered the 16550 IIR itself with `F$IRQ`. Wildbits devices
+   instead register an interrupt-controller pending register, then acknowledge
+   their bit in that controller. The UART never cleared `INT_UART` in
+   `INT_PENDING_1`, allowing the first active UART event to become an IRQ storm.
+2. The transmit ISR waited for `LSR_XMIT_DONE` after every byte while executing
+   in IRQ context. This serialized the FIFO and could trap the kernel if `TEMT`
+   did not become visible as expected.
+
+The repaired driver registers `INT_PENDING_1` with an active-high `INT_UART`
+mask, clears the controller latch on entry, and drains all pending causes from
+the UART IIR. The transmit ISR fills up to 15 FIFO positions without waiting
+for each byte to finish. It disables the THRE source once the software buffer
+is empty.
 
 ### `sc16550` behavior
 
-The Jr2 conditional implementation in
+The implementation in
 [`level1/wildbits/modules/sc16550.asm`](level1/wildbits/modules/sc16550.asm)
 does the following:
 
-- defines both the base interrupt mask and transmit interrupt mask as zero;
-- initializes the UART and clears stale UART state without enabling a UART
-  interrupt source;
-- polls `LSR_XMIT_EMPTY` for writes, using a bounded wait so a missing
-  transmitter-ready indication cannot trap the kernel forever;
-- polls `LSR_DATA_AVAIL` for reads and sleeps one tick between empty polls;
-- checks pending process signals while waiting, so Ctrl-C can interrupt a read;
-  and
-- leaves the existing interrupt-driven implementation unchanged for non-Jr2
-  platforms.
+- registers `INT_PENDING_1` rather than the UART IIR in the NitrOS-9 polling
+  table on Wildbits;
+- clears a stale `INT_UART` latch before unmasking the controller;
+- acknowledges `INT_UART` when its service routine starts;
+- enables receive, line-status, and modem-status interrupts while idle, adding
+  THRE only while transmit work is pending;
+- buffers both receive and transmit data through the existing SCF queues;
+- fills the transmit FIFO without a `TEMT` busy-wait inside the ISR;
+- rejects a stale IIR value instead of dispatching it as a real cause; and
+- masks and acknowledges the controller before removing its IRQ-table entry
+  during termination.
 
-The driver still registers its IRQ entry and unmasks the Jr2 UART bit at the
-system controller. This is harmless while the UART IER remains zero, because
-the UART cannot assert one of its interrupt sources. It also minimizes the
-platform-specific changes while the root cause is investigated.
+The driver also releases its allocated receive buffer if `F$IRQ` cannot install
+the polling entry. Break-error accumulation now tests the LSR break bit with
+the correct polarity.
+
+### IRQ table utility
+
+The apparently random IRQ table was a separate build defect. Wildbits Level 2
+did not put its platform command directory on the assembler include path.
+Shared commands therefore resolved `level1/cmds/defsfile` through the Level 1
+platform directory. The Level 1 and Level 2 `irqs` binaries were identical and
+the command read user-space bytes as if they were Level 1 system globals.
+
+The Level 2 recipe now resolves `level2/wildbits/defsfile`. Its `irqs` module
+copies the Level 2 device and polling tables through the system process DAT
+image. Driver lookup also compares the complete 16-bit static-storage pointer,
+not only its high byte.
 
 The `/t0` descriptor is defined in
 [`level1/wildbits/modules/sc16550desc.asm`](level1/wildbits/modules/sc16550desc.asm).
@@ -202,10 +229,11 @@ normal and DriveWire image choices in
 The sibling `nitros9-languages` checkout was not present for the tested builds,
 so `BASIC09=` was supplied explicitly.
 
-Build the normal SD-rooted image:
+Build the normal SD-rooted image (use `BASIC09=` when the sibling languages
+checkout is absent):
 
 ```sh
-make -B -C recipes/wildbits/l2 BASIC09= all
+make -C recipes/wildbits/l2 BASIC09= all
 ```
 
 Flash this file for `/t0` testing:
@@ -217,7 +245,7 @@ recipes/wildbits/l2/l2_wildbitsjr2.dsk
 Build the DriveWire-rooted FujiNet image:
 
 ```sh
-make -B -C recipes/wildbits/l2dw BASIC09= all
+make -C recipes/wildbits/l2dw BASIC09= all
 ```
 
 Flash this file only after the host bridge and FujiNet DriveWire disk are ready:
@@ -238,6 +266,16 @@ The last hardware-tested artifacts recorded build ID `77d714db`:
 
 These hashes identify that test build only and will change when the image is
 rebuilt.
+
+The IRQ-repair hardware-test build from 2026-08-01 is:
+
+| Image | SHA-256 |
+| --- | --- |
+| normal `l2_wildbitsjr2.dsk` | `9accc192ef321eff867db078c88e0c3e53c00512ba2c41057fac1350d7391b37` |
+
+The source changes were still uncommitted for this build, so its visible
+boot ID remains the current `uart-fixes` HEAD, `033fbf24`. Use the image hash
+above to distinguish it during hardware validation.
 
 ## Normal `/t0` validation
 
@@ -309,17 +347,16 @@ extra character injected into the stream can invalidate a DriveWire packet.
 
 ## Troubleshooting and diagnostic caveats
 
-- If `iniz /t0` works but `echo ... >/t0` never returns, the image may still
-  contain the old THRE-interrupt transmit path. Confirm that the boot file was
-  rebuilt and reflashed.
+- If `iniz /t0` works but `echo ... >/t0` never returns, confirm the image has
+  the repaired controller acknowledgement and non-blocking TX FIFO fill.
 - If incoming data freezes an older image, it may have reached the RX FIFO
-  trigger and entered the broken receive ISR. Use the fully polled build.
+  trigger while the controller latch was never acknowledged.
 - If `copy /t0 /term` waits with no prompt, it is waiting for input as designed.
   Use Ctrl-C to stop it.
 - `ERROR #003` after Ctrl-C is `S$Intrpt`, not an I/O error from the UART.
-- The current `irqs` utility produced nonsensical rows such as repeated
-  `startup` entries and random addresses on the updated Level 2 layout. Do not
-  use that output as evidence that UART IRQ handlers are installed correctly.
+- A 736-byte `irqs` in a Level 2 image is the incorrectly assembled Level 1
+  module. The repaired Level 2 module is 837 bytes in this build and has a
+  1,845-byte data area.
 - A visible boot build ID does not change until a genuinely new commit is used
   for the rebuild. Rebuilding an unchanged commit produces the same ID.
 - The external FujiNet-side adapter was not enumerated during the final `/t0`
@@ -328,17 +365,28 @@ extra character injected into the stream can invalidate a DriveWire packet.
 
 ## Verified behavior and remaining work
 
-The following was verified on physical Jr2 hardware with the normal image:
+The following polled baseline was verified on physical Jr2 hardware with the
+normal image before restoring IRQ operation:
 
 - the system boots to a shell with `sc16550` and `/t0` resident;
 - `iniz /t0` returns normally;
 - outbound bytes sent through `/t0` arrive exactly on Jr2 USB channel 2;
 - inbound bytes from the Mac appear through `copy /t0 /term`; and
-- Ctrl-C interrupts the polled read and returns control to the shell.
+- Ctrl-C interrupts the read and returns control to the shell.
 
-The DriveWire boot file composition and image build were verified, but the
-end-to-end bridge through the external adapter to a physical FujiNet remains
-the next hardware integration step. Other follow-up work is to locate the
-underlying Jr2 ISR/controller fault, repair `irqs` for the current Level 2
-layout, and revisit the runtime module-load freeze independently of the UART
-transport.
+The repaired IRQ path was then verified on the physical Jr2:
+
+- the Level 2 device table was at `$8700` and the polling table at `$88FB`;
+- `irqs` showed `vtio` at `$FE20` with mask `$04` and `sc16550` at `$FE21`
+  with flip `$00`, mask `$01`, and priority `$80`;
+- `iniz /t0` returned to the shell with the UART IRQ entry installed;
+- `echo IRQ-TX-1234567890 >/t0` transmitted through the THRE interrupt path
+  and returned to the prompt;
+- an inbound `IRQ-RX-1234567890` burst crossed the RX FIFO trigger, appeared
+  through `copy /t0 /term`, and left the system responsive; and
+- Ctrl-C stopped the copy and returned `ERROR #003` (`S$Intrpt`) as expected.
+
+Long-duration and simultaneous bidirectional stress remain useful follow-up
+tests. The DriveWire boot file composition was verified separately, but the
+end-to-end bridge through the external adapter to a physical FujiNet still
+remains to be tested.

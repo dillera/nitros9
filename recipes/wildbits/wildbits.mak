@@ -34,6 +34,7 @@ OS9FORMAT_CMD ?= $(OS9FORMAT_SD)
 AFLAGS += -D$(PLATFORM) -I.
 ifeq ($(LEVEL),2)
 AFLAGS += -I$(L2PD)
+AFLAGS += -I$(L2PCD)
 AFLAGS += -I$(L2MD)/kernel -I$(L2PMD)
 endif
 AFLAGS += -I$(L1MD)/kernel -I$(L1PMD)

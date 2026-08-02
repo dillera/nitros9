@@ -64,16 +64,8 @@ TXF.NXON equ %00000100 currently waiting for XON
 TXF.NCTS equ %00000010 waiting for CTS to go back up
 TXF.NDSR equ %00000001 waiting for DSR to go back up
 
-* The Jr2 16550 interrupt path locks once active transmit or receive work
-* reaches its ISR.  FujiNet uses a three-wire serial connection, and the
-* Jr2 DriveWire backend is polled as well, so keep the Jr2 UART IER clear.
- ifne jr2
-UART_BASE_IRQS equ $00
-UART_TX_IRQS equ $00 Jr2 transmit and receive are polled
- else
 UART_BASE_IRQS equ UINT_MODEM_STATUS+UINT_LINE_STATUS+UINT_DATA_AVAIL
 UART_TX_IRQS equ UART_BASE_IRQS+UINT_THR_EMPTY
- endc
 
  mod eom,name,tylg,atrv,start,size
 
@@ -216,16 +208,24 @@ cont4@ bita #MSR_DSR is DSR bit set?
  bne cont5@ yes, skip ahead
  orb #FCDSRDTR else add that bit flag
 cont5@ stb <TxFloCtl save flags
+ ifne wildbits
+ ldd #INT_PENDING_1 Wildbits IRQs are routed through the system controller
+ else
  ldd <V.PORT get pointer to 16550 hardware base address
- addd #UART_FCR point to 16550 status register
+ addd #UART_IIR point to 16550 interrupt identification register
+ endc
  leax >IRQPckt,pcr point to 5 byte IRQ packet settings
  leay >IRQSvc,pcr point to IRQ service routine
  os9 F$IRQ install ourselves in IRQ polling table
+ bcs IRQInstallError do not unmask a device with no polling-table entry
 * System-dependent interrupt behavior goes here
  ifne wildbits
-* Wildbits: Turn on interrupt controller's interrupt for the UART         
+* Clear a stale controller latch before unmasking the UART interrupt.
+ lda #INT_UART
+ sta INT_PENDING_1
+* Wildbits: Turn on interrupt controller's interrupt for the UART
  lda INT_MASK_1
- anda #~INT_UART
+ anda #^INT_UART
  sta INT_MASK_1
  else
 * CoCo: set MPI select
@@ -250,6 +250,16 @@ cont6@ lda >PIA1Base+3 fetch PIA1 CR B
  bsr SetIRQSources
  puls pc,dp,b,cc restore registers, reenable IRQs, and return
 
+IRQInstallError stb 1,s preserve the F$IRQ error across the memory release
+ pshs u preserve the driver's static-storage pointer
+ ldd <rxBuffSize
+ ldu <rxBufStrt
+ os9 F$SRtMem release the receive buffer allocated above
+ puls u restore the driver's static-storage pointer
+ puls dp,b,cc
+ orcc #Carry
+ rts
+
 * Write
 *
 * Entry:
@@ -263,21 +273,6 @@ cont6@ lda >PIA1Base+3 fetch PIA1 CR B
 Write clrb
  pshs dp,b,cc
  lbsr SetDPShortcut point DP to first 256 bytes of device memory area
- ifne jr2
-* Bypass the Jr2 transmit-interrupt path.
-* Bound the readiness wait so a bad LSR value cannot trap the kernel.
- ldx <V.PORT get pointer to 16550
- pshs y,a preserve path descriptor and output character
- ldy #$2000 bounded readiness poll
-polltx@ ldb UART_LSR,x
- bitb #LSR_XMIT_EMPTY is the transmit holding register empty?
- bne txready@
- leay -1,y
- bne polltx@
-txready@ puls a,y restore output character and path descriptor
- sta UART_TRHB,x write one character directly
- puls pc,dp,b,cc
- endc
  ldx <outNxt get pointer to next empty spot in our transmit buffer
  sta ,x+ append the character
  cmpx <txBufEnd have we hit physical end of transmit buffer?
@@ -320,23 +315,6 @@ SetIRQSources ldx <V.PORT get pointer to 16550
 Read clrb clear carry
  pshs dp,b,cc save registers (B's position on the stack will be used as A (character return))
  lbsr SetDPShortcut point DP to first 256 bytes of device memory area
- ifne jr2
-* Bypass the Jr2 receive-interrupt path.
-pollrx@ ldx <V.PORT get pointer to 16550
- lda UART_LSR,x get line status
- bita #LSR_DATA_AVAIL is a character ready?
- bne rxready@
- ldx #$0001 yield for one tick while waiting
- os9 F$Sleep
- ldx >D.Proc get current process descriptor
- ldb <P$Signal,x get any pending signal
- beq pollrx@
- cmpb #S$Intrpt is it keyboard interrupt, abort, or wake?
- bls errexit@
- bra pollrx@
-rxready@ lda UART_TRHB,x return one received character
- puls pc,dp,b,cc
- endc
  orcc #IntMasks turn IRQs off
  ldd <rxBufCnt get number of bytes in receive buffer
  beq suspend@ none, so go suspend process
@@ -770,9 +748,7 @@ Term clrb
  pshs dp,b,cc
  lbsr SetDPShortcut point DP to first 256 bytes of device memory area
  orcc #IntMasks turn IRQs off
- ldx #$0000 remove device from IRQ polling table
- os9 F$IRQ
- clra  
+ clra
  clrb  
  std <rxBufCnt set receive buffer size to 0
  ldx <rxBufStrt
@@ -802,8 +778,19 @@ cont0@ orcc #IntMasks else turn IRQs off
  bra loop@ keep going until transmit buffer is empty
 * transmitter holding register on 16550 is empty
 cont1@ leas 4,s eat temporary stack
+ ifne wildbits
+ lda INT_MASK_1 mask the controller before removing the polling entry
+ ora #INT_UART
+ sta INT_MASK_1
+ endc
  clr UART_IER,x disable 16550 interrupt enable
  clr UART_MCR,x clear modem control register on 16550
+ ifne wildbits
+ lda #INT_UART clear any final latched UART interrupt
+ sta INT_PENDING_1
+ endc
+ ldx #$0000 remove device from IRQ polling table
+ os9 F$IRQ
  andcc #^IntMasks turn IRQs back on
  ldd <rxBuffSize get number of bytes to return to system
  ldu <rxBufStrt get pointer to start page address to return RAM to system
@@ -852,12 +839,14 @@ IRQSvc clrb clear carry
  pshs dp,b,cc save registers
  bsr SetDPShortcut set DP to start of device memory
  clr <sigCode ???
+ ifne wildbits
+ lda #INT_UART acknowledge the Wildbits interrupt-controller latch
+ sta INT_PENDING_1
+ endc
  ldy <V.PORT get pointer to 16550
  ldb UART_IIR,y get interrupt identification register
  bitb #IIR_INTERRUPT_PENDING is an interrupt pending?
  beq BranchForIRQ yes, skip ahead
- andb #IIR_INTID_MASK strip the IRQ pending bit
- bne BranchForIRQ if any of the 3 bits are set, call 16550 IRQ dispatch table
  puls cc all clear, we likely were called in error, return carry set to IOMAN
  orcc #Carry so that it can continue through the IRQ polling table looking for source
  puls pc,dp,b restore registers and return
@@ -1059,11 +1048,8 @@ cont1@ cmpb <txBufCnt compare against number of tx bytes ready
 cont3@ pshs b save the count to the stack
 loop@ lda ,x+ get the next available byte
  sta UART_TRHB,y store it in the register
-loop1@ lda UART_LSR,y get value of line status register
- bita #LSR_XMIT_DONE is xmit done?
- beq loop1@ branch if not
  decb decrement the count
- bne loop@ branch if 
+ bne loop@ fill the available transmit FIFO slots
  cmpx <txBufEnd
  bcs cont4@
  ldx <txBufStrt
@@ -1141,15 +1127,22 @@ ckframe@ bita #LSR_ERR_FRAME is framing error?
  beq ckbreak@
  orb #FrmingEr
 ckbreak@ bita #LSR_BREAK_INT is break
- bne ex@ branch if so
+ beq save@ branch if not
  orb #BrkEr set bit for V.ERR
+save@
  orb <V.ERR merge with current error accumulator
  stb <V.ERR and save it back
 ex@ puls pc,b
 
 * IRQ Packet settings
-IRQPckt fcb $01 flip byte 16550 device address+2 is status register, and lowest
- fcb $01 mask byte bit clear means IRQ needs to be serviced
+IRQPckt
+ ifne wildbits
+ fcb $00 Wildbits controller pending bits are active high
+ fcb INT_UART service the UART bit in interrupt group 1
+ else
+ fcb $01 16550 IIR bit 0 is active low
+ fcb $01 service when the IIR pending bit is clear
+ endc
  fcb $80 IRQ priority
          
 brate macro
