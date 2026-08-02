@@ -1,9 +1,5 @@
 default.proraw
 
-# Local AI assistant configuration
-.claude/
-.codex/
-
 # macOS desktop services storage file
 .DS_Store
 
