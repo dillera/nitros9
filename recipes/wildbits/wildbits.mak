@@ -87,6 +87,8 @@ BOOTMODS = krn krnp2 ioman init \
 endif
 
 SHELLMODS = shellplus date deiniz echo iniz link load save unlink
+UTILPAK1_MODS = attr build copy del deldir dir display list makdir mdir \
+	merge mfree procs rename tmode
 FUJINET_CMDS = fngetdevfile fnsetdevfile fnlisthosts fngethost fnsethost \
 	fnlistdevs fnmount fnmountimg fnstatus
 ifeq ($(FUJINET),1)
@@ -99,10 +101,14 @@ CMDS += $(STDCMDS) shell \
 	$(CMDS_EXTRA)
 
 ifeq ($(LEVEL),2)
+UTILPAK1_OVERLAP = $(filter $(SHELLMODS),$(UTILPAK1_MODS))
+ifneq ($(strip $(UTILPAK1_OVERLAP)),)
+$(error shell and utilpak1 contain duplicate modules: $(UTILPAK1_OVERLAP))
+endif
 CMDS += dmem minted mmap modpatch \
 	proc pmap smap \
 	gfxstatus xtclut drawtest play \
-	shellbg shellbgoff ntptime view fadein fadeout
+	shellbg shellbgoff ntptime view utilpak1 fadein fadeout
 endif
 
 BASIC09 = basic09 runb inkey syscall wild
@@ -230,6 +236,11 @@ endif
 # Command rules
 $(MODDIR)/shell: $(addprefix $(MODDIR)/,$(SHELLMODS)) | $(MODDIR)
 	$(MERGE) $(addprefix $(MODDIR)/,$(SHELLMODS)) >$@
+
+ifeq ($(LEVEL),2)
+$(MODDIR)/utilpak1: $(addprefix $(MODDIR)/,$(UTILPAK1_MODS)) | $(MODDIR)
+	$(MERGE) $(addprefix $(MODDIR)/,$(UTILPAK1_MODS)) >$@
+endif
 
 $(MODDIR)/pwd: pd.asm | $(MODDIR)
 	$(AS) $(AFLAGS) $< $(ASOUT)$@ -DPWD=1
