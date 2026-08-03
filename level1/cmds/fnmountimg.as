@@ -10,7 +10,7 @@
 *   1      2026/07/13  Andrew Diller
 * Created.
 
-DEVSLOTS            equ       8                   device slots (firmware MAX_DISK_DEVICES)
+DEVSLOTS            equ       4                   DriveWire MAX_DWDISK_DEVICES
 
                     section   __os9
 type                equ       Prgrm

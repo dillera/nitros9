@@ -13,7 +13,7 @@
 
 FILEPATHSZ          equ       256
 
-DEVSLOTS            equ       8                   device slots (firmware MAX_DISK_DEVICES)
+DEVSLOTS            equ       4                   DriveWire MAX_DWDISK_DEVICES
 HOSTSLOTS           equ       8                   host slots (firmware MAX_HOSTS)
 
                     section   __os9
