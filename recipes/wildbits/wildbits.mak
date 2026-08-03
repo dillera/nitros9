@@ -167,6 +167,16 @@ LIB_NAMES += libfuji.a
 endif
 include ../../libs.mak
 
+ifeq ($(FUJINET),1)
+# The Fuji routines are statically copied into each command.  Track the archive
+# explicitly so a lib/fuji.as change cannot leave old fn* modules in a new disk
+# image.  The generic object-link rule does not know which libraries LFLAGS
+# names, so it cannot infer this dependency itself.
+$(addprefix $(MODDIR)/,$(FUJINET_CMDS)): $(MODDIR)/%: $(OBJDIR)/%.o $(LIBDIR)/libfuji.a | $(MODDIR)
+	$(LINKER) $(LFLAGS) $(OBJDIR)/$*.o -o$*
+	$(MOVE) $* $@
+endif
+
 $(MODDIR)/sysgo: $(OBJDIR)/sysgo.o | $(MODDIR)
 	$(LINKER) $(LFLAGS) $^ -osysgo
 	$(MOVE) sysgo $@
